@@ -2671,6 +2671,42 @@ class TelegramAdapter(BasePlatformAdapter):
         self._persist_dm_topic_thread_id(chat_id_int, name, int(thread_id), replace_existing=force_create)
         return str(thread_id)
 
+    async def send_terminal_topic_status(
+        self, chat_id: str, task: Any, thread_id: str
+    ) -> SendResult:
+        """Post the status card for a mirrored terminal task into its DM topic.
+
+        The card carries one button back to the Mac that owns the task, so the
+        topic is a two-way switch, not just a notification.
+        """
+        if not self._bot:
+            return SendResult(success=False, error="Not connected", retryable=True)
+        try:
+            chat_id_arg: Any = int(chat_id)
+        except (TypeError, ValueError):
+            chat_id_arg = chat_id
+        try:
+            thread_id_arg: Any = int(thread_id)
+        except (TypeError, ValueError):
+            thread_id_arg = thread_id
+        tty = str(getattr(task, "tty", "") or "")
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🖥 Focus Terminal", callback_data=f"term:{tty}"),
+        ]])
+        try:
+            message = await self._bot.send_message(
+                chat_id=chat_id_arg,
+                text=task.status_text,
+                message_thread_id=thread_id_arg,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        except Exception as exc:  # adapter contract: report, never raise out to the caller
+            logger.warning("[%s] Terminal topic status card failed for %s: %s", self.name, tty, exc)
+            return SendResult(success=False, error=str(exc), retryable=True)
+        return SendResult(success=True, message_id=str(getattr(message, "message_id", "") or ""))
+
     async def rename_dm_topic(self, chat_id: int, thread_id: int, name: str) -> None:
         """Rename a forum topic in a private (DM) chat."""
         if not self._bot:
@@ -4805,10 +4841,24 @@ class TelegramAdapter(BasePlatformAdapter):
         for prefix, handler in (
             ("gt:", self._handle_gmail_triage_callback), ("ea:", self._handle_exec_approval_callback),
             ("sc:", self._handle_slash_confirm_callback), ("cl:", self._handle_clarify_callback),
+            ("term:", self._handle_terminal_focus_callback),
             ("update_prompt:", self._handle_update_prompt_callback)):
             if data.startswith(prefix):
                 await handler(query, data, cb)
                 return
+
+    async def _handle_terminal_focus_callback(self, query, data: str, cb: Dict[str, Any]) -> None:
+        """``term:<tty>`` — bring the Mac's terminal app forward for a mirrored task.
+
+        Read-only on the Mac side: the button only activates the already-running
+        Terminal.app, it never types into the session.
+        """
+        if not await self._callback_authorized(query, cb, _unauthorized()):
+            return
+        from gateway.terminal_topics import focus_terminal_app
+
+        focused = focus_terminal_app()
+        await query.answer(text="Terminal focused on the Mac" if focused else "Could not focus Terminal")
 
     async def _claim_callback_state(self, query, cb: Dict[str, Any], state: dict, key, denial: str, resolved: str, *, pop: bool = True):
         """Auth-gate a button tap, then claim its pending entry; None (after answering) when refused or expired."""

@@ -5669,9 +5669,126 @@ async def _start_gateway_start_control_socket(runner):
             except concurrent.futures.TimeoutError:
                 return {"multiplex": True, "pending": True, "served_profiles": runner.served_profile_names()}
 
+        # Terminal-topic sync is intentionally memory-scoped: the current live task gets announced once
+        # per gateway lifetime, while Telegram's persisted named-topic map prevents duplicate topics on a
+        # gateway restart. A task that failed to create/send stays unmarked and is retried next tick.
+        _announced_terminal_sessions: set[str] = set()
+
+        def _sync_terminal_topics_handler() -> dict:
+            """Mirror newly active local ``hermes --cli`` terminals into Telegram DM topics.
+
+            The control-socket thread only gathers the small local process snapshot; every Telegram call
+            is marshalled onto the gateway's running event loop and therefore reuses its one live adapter.
+            """
+            import subprocess
+            import time
+
+            from gateway.config import Platform
+            from gateway.terminal_topics import (
+                collect_live_terminal_tasks, enrich_with_session_titles, sync_live_terminal_tasks)
+            from hermes_constants import get_hermes_home
+
+            try:
+                listing = subprocess.run(
+                    ["/bin/ps", "-u", str(os.getuid()), "-o", "pid=,tty=,command="],
+                    check=True, capture_output=True, text=True, timeout=3.0,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return {"active": 0, "new": 0, "created_or_updated": 0, "failed": 1,
+                        "error": f"terminal process scan failed: {type(exc).__name__}"}
+
+            home = get_hermes_home()
+            tasks = collect_live_terminal_tasks(
+                listing.stdout, home / "terminal-sessions", now=time.time())
+            new_tasks = [task for task in tasks if task.session_id not in _announced_terminal_sessions]
+            if not new_tasks:
+                return {"active": len(tasks), "new": 0, "created_or_updated": 0, "failed": 0, "topics": []}
+            new_tasks = enrich_with_session_titles(new_tasks)
+
+            profile = getattr(runner, "_primary_profile_name", None) or "default"
+            home_channel = runner.config.get_home_channel(Platform.TELEGRAM)
+            if home_channel is None or not home_channel.chat_id:
+                return {"active": len(tasks), "new": len(new_tasks), "created_or_updated": 0,
+                        "failed": len(new_tasks), "error": "Telegram home channel is unavailable", "topics": []}
+            adapter = runner._authorization_adapter(Platform.TELEGRAM, profile)
+            if adapter is None:
+                return {"active": len(tasks), "new": len(new_tasks), "created_or_updated": 0,
+                        "failed": len(new_tasks), "error": "Telegram adapter is unavailable", "topics": []}
+
+            future = asyncio.run_coroutine_threadsafe(
+                sync_live_terminal_tasks(adapter, str(home_channel.chat_id), new_tasks), _main_loop)
+            try:
+                result = future.result(timeout=20.0)
+            except concurrent.futures.TimeoutError:
+                return {"active": len(tasks), "new": len(new_tasks), "created_or_updated": 0,
+                        "failed": len(new_tasks), "error": "Telegram topic sync timed out", "topics": []}
+            except Exception as exc:
+                return {"active": len(tasks), "new": len(new_tasks), "created_or_updated": 0,
+                        "failed": len(new_tasks), "error": f"Telegram topic sync failed: {type(exc).__name__}", "topics": []}
+
+            succeeded_ttys = {row.get("tty") for row in result.get("topics", [])}
+            _announced_terminal_sessions.update(task.session_id for task in new_tasks if task.tty in succeeded_ttys)
+            return {"active": len(tasks), "new": len(new_tasks), **result}
+
+        def _close_dm_topic_handler(params: dict) -> dict:
+            """One-off maintenance verb: delete a Telegram DM topic and drop its persisted
+            thread_id mapping. Used to retire duplicate topics created before topic identity
+            was keyed by TTY instead of session_id (#terminal-topics cleanup)."""
+            import asyncio as _asyncio
+
+            from gateway.config import Platform
+            from hermes_cli.config import atomic_config_write, read_user_config_raw
+            from hermes_constants import get_hermes_home
+
+            try:
+                chat_id = int(params.get("chat_id"))
+                thread_id = int(params.get("thread_id"))
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "chat_id and thread_id must be integers"}
+
+            profile = getattr(runner, "_primary_profile_name", None) or "default"
+            adapter = runner._authorization_adapter(Platform.TELEGRAM, profile)
+            if adapter is None or not getattr(adapter, "_bot", None):
+                return {"ok": False, "error": "Telegram adapter is unavailable"}
+
+            async def _delete():
+                bot = adapter._bot
+                try:
+                    return await bot.delete_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+                except Exception as delete_exc:
+                    try:
+                        await bot.close_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+                        return True
+                    except Exception as close_exc:
+                        raise RuntimeError(
+                            f"delete_forum_topic: {delete_exc}; close_forum_topic: {close_exc}") from delete_exc
+
+            future = _asyncio.run_coroutine_threadsafe(_delete(), _main_loop)
+            try:
+                future.result(timeout=15.0)
+            except Exception as exc:
+                return {"ok": False, "error": f"delete_forum_topic failed: {type(exc).__name__}: {exc}"}
+
+            config_path = get_hermes_home() / "config.yaml"
+            config = read_user_config_raw(config_path)
+            dm_topics = config.get("platforms", {}).get("telegram", {}).get("extra", {}).get("dm_topics", [])
+            removed = False
+            for chat_entry in dm_topics:
+                if str(chat_entry.get("chat_id")) != str(chat_id):
+                    continue
+                before = len(chat_entry.get("topics", []))
+                chat_entry["topics"] = [t for t in chat_entry.get("topics", []) if int(t.get("thread_id", -1)) != thread_id]
+                removed = len(chat_entry["topics"]) < before
+                break
+            if removed:
+                atomic_config_write(config_path, config)
+            return {"ok": True, "deleted_thread_id": thread_id, "config_entry_removed": removed}
+
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler,
                            "rescan-profiles": _rescan_profiles_handler,
+                           "sync-terminal-topics": _sync_terminal_topics_handler,
+                           "close-dm-topic": _close_dm_topic_handler,
                            "unserve-profile": unserve_profile_verb(runner),
                            "serve-profile": serve_profile_verb(runner),
                            "migrate-profile-identity": migrate_profile_identity_verb(runner),

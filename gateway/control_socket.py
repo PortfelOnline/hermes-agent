@@ -398,6 +398,13 @@ def purge_gateway_profile_identity(home: Path, name: str, *,
     return query_gateway_control(home, "purge-profile-identity", params={"name": name}, timeout=timeout)
 
 
+def request_terminal_topic_sync(home: Path, *, timeout: float = 20.0) -> Optional[dict[str, Any]]:
+    """Ask the live gateway to mirror newly active local Hermes CLI tasks into
+    Telegram direct-message topics. The gateway owns the Telegram adapter, so
+    this client never loads a bot token or opens a second polling connection."""
+    return query_gateway_control(home, "sync-terminal-topics", timeout=timeout)
+
+
 def reload_gateway_plugins(home: Path, *, profile_home: Optional[Path] = None,
                            timeout: float = 30.0) -> Optional[dict[str, Any]]:
     """Ask the gateway serving ``home`` to force plugin re-discovery for ``profile_home`` (default: ``home``)
