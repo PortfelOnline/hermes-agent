@@ -310,6 +310,12 @@ def _format_async_delegation(evt: dict) -> str:
         else:  # error / timeout / failed / unknown (owner died)
             lines.append(
                 f"The subagent did not complete successfully (status={status})." + (f"\n{error}" if error else ""))
+            if evt.get("recovery_required"):
+                lines += [
+                    "RECOVERY ACTION: this delegation was interrupted by owner-process loss.",
+                    "Inspect the transcript tail and git state, then re-dispatch the original goal once.",
+                    "Treat external side effects as possibly completed; verify them before repeating.",
+                ]
             lines += _recovery_lines(evt)
         if summary:
             lines += ["Partial output:", summary]

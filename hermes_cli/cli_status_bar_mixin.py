@@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
 from __future__ import annotations
 
 import errno
+import re
 import shutil
 import threading
 import time
@@ -37,6 +38,15 @@ def _threshold_style(value, ladder, fallback: str) -> str:
 def _finite(v):
     """Drop NaN / negative / absurd provider timings (e.g. -0.8s seen in logs)."""
     return None if v is None or v != v or v < 0 or v > 1e6 else v
+
+
+def _show_concrete_route_model(model_short: str, model_name: str) -> str:
+    if not model_short.startswith("route-"):
+        return model_short
+    concrete = model_name.rsplit("/", 1)[-1]
+    match = re.fullmatch(r"gpt-(\d+(?:\.\d+)?)-(sol|luna|terra)(?:-.*)?", concrete, re.IGNORECASE)
+    concrete = f"{match[2].title()} {match[1]}" if match else concrete
+    return f"{model_short} · {concrete}"
 
 
 class CLIStatusBarMixin:
@@ -197,6 +207,7 @@ class CLIStatusBarMixin:
         # Friendly display: reverse-alias from config ``model_aliases:`` first (turns long
         # Palantir RIDs into the user's short name), else slash/length truncation.
         model_short = _reverse_alias_for_display(model_name)
+        model_short = _show_concrete_route_model(model_short, model_name)
         if model_short == model_name:
             model_short = model_name.split("/")[-1] if "/" in model_name else model_name
             # Shared RID-prefix stripper so this and ModelSwitchResult can't drift.

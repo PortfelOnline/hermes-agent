@@ -993,7 +993,7 @@ class GatewayBusySessionMixin:
     _COMMAND_HANDLER_ALIASES = {"bg": "_handle_background_command", "sethome": "_handle_set_home_command"}
     # Ordinary slash handlers shared by idle and busy dispatch.
     _PLAIN_COMMANDS = (
-        "status", "context", "restart", "approve", "deny", "pause", "agents", "bg", "btw",
+        "status", "context", "restart", "approve", "deny", "pause", "stopall", "resumeall", "agents", "bg", "btw",
         "kanban", "subgoal", "heartbeat", "busy", "yolo", "verbose", "footer", "help",
         "commands", "profile", "login", "update", "version", "autoprune",
     )
@@ -1039,7 +1039,7 @@ class GatewayBusySessionMixin:
 
     # busy_handler key (hermes_cli/commands.py CommandDef) → mid-run variant ``_busy_<key>_command``.
     _BUSY_SPECIAL_HANDLERS: dict[str, str] = {
-        k: f"_busy_{k}_command" for k in ("start", "stop", "new", "queue", "steer", "egress", "goal", "loop")
+        k: f"_busy_{k}_command" for k in ("start", "stop", "new", "queue", "steer", "egress", "goal", "loop", "model")
     }
 
     async def _dispatch_busy_slash_command(self, event: MessageEvent, cmd_def, quick_key: str, source):
@@ -1116,6 +1116,36 @@ class GatewayBusySessionMixin:
         from hermes_cli.proxy_cli import format_status_text
         await _busy_accepted()
         return format_status_text()
+
+    async def _busy_model_command(self, event: MessageEvent, quick_key: str, source):
+        """``/model <target>`` sent mid-run: accept it and apply it when the running turn finishes.
+
+        Nothing is committed now: swapping the model under a live agent would change it inside its
+        tool loop. ``_apply_deferred_busy_model_switch`` runs the normal ``/model`` command once the
+        turn has released its slot, so the next turn (and any queued messages) use the new model.
+        """
+        from hermes_cli.model_switch import parse_model_switch_args
+        request = parse_model_switch_args((event.get_command_args() or "").strip())
+        if request.errors:
+            return f"❌ {request.error_messages()[0]}"
+        if not (request.target or request.explicit_provider) or request.is_once:
+            return t("gateway.busy.reject_model")
+        await _busy_accepted()
+        self.__dict__.setdefault("_deferred_busy_model_switches", {})[quick_key] = event
+        return t("gateway.busy.model_deferred", target=request.target or request.explicit_provider)
+
+    async def _apply_deferred_busy_model_switch(self, quick_key: str) -> None:
+        """Apply a ``/model`` queued mid-run for ``quick_key``; called once that turn has ended."""
+        pending = self.__dict__.get("_deferred_busy_model_switches", {}).pop(quick_key, None)
+        if pending is None:
+            return
+        try:
+            reply = await self._handle_model_command(pending)
+        except Exception:
+            logger.warning("Deferred /model switch failed for %s", quick_key, exc_info=True)
+            reply = t("gateway.model.error_prefix", error="deferred switch failed")
+        if reply:
+            await self._send_command_ack(pending.source, reply, "model")
 
     async def _busy_stop_command(self, event: MessageEvent, quick_key: str, source):
         # Hard-kill: a soft interrupt can't reach a truly hung executor thread.

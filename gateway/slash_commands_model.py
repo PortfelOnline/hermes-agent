@@ -909,3 +909,85 @@ class GatewayModelCommandsMixin:
         if picker_sent:
             return None  # Picker sent — adapter handles the response
         return t("gateway.fast.status", mode=status)
+
+    async def _handle_tier_up_command(self, event: MessageEvent) -> Optional[str]:
+        """Escalate to next tier model (Haiku → Sonnet → Opus)."""
+        from hermes_cli.model_tiers import tier_escalation_chain
+
+        source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
+        session_key = self._session_key_for_source(source)
+
+        # Get current model via _model_for_session_or_default (mirrors /model logic)
+        current = await asyncio.to_thread(
+            lambda: self._model_for_session_or_default(session_key, source) if hasattr(self, '_model_for_session_or_default') else None)
+        if not current:
+            return t("gateway.tier_up.unavailable")
+
+        chain = tier_escalation_chain(current)
+        if not chain or len(chain) < 2:
+            return t("gateway.tier_up.no_escalation", model=current)
+
+        try:
+            current_idx = chain.index(current)
+            if current_idx >= len(chain) - 1:
+                return t("gateway.tier_up.already_top", model=current)
+            next_model = chain[current_idx + 1]
+        except ValueError:
+            return t("gateway.tier_up.unknown_tier", model=current)
+
+        # Perform the switch
+        ctx = _ModelSwitchContext(
+            session_key=session_key, source=source, config_path=self.config_path,
+            persist_global=False, one_turn=False, reasoning_effort="")
+        ctx.read_config()
+
+        result, error = await self._perform_model_switch(ctx, next_model, explicit_provider=None, source=source)
+        if error:
+            return error
+
+        switch_error = self._switch_cached_agent_model(result, ctx, picker=False)
+        if switch_error:
+            return switch_error
+
+        return t("gateway.tier_up.success", from_model=current, to_model=next_model)
+
+    async def _handle_tier_down_command(self, event: MessageEvent) -> Optional[str]:
+        """Downgrade to cheaper tier model (Opus → Sonnet → Haiku)."""
+        from hermes_cli.model_tiers import tier_escalation_chain
+
+        source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
+        session_key = self._session_key_for_source(source)
+
+        # Get current model
+        current = await asyncio.to_thread(
+            lambda: self._model_for_session_or_default(session_key, source) if hasattr(self, '_model_for_session_or_default') else None)
+        if not current:
+            return t("gateway.tier_down.unavailable")
+
+        chain = tier_escalation_chain(current)
+        if not chain or len(chain) < 2:
+            return t("gateway.tier_down.no_downgrade", model=current)
+
+        try:
+            current_idx = chain.index(current)
+            if current_idx <= 0:
+                return t("gateway.tier_down.already_bottom", model=current)
+            prev_model = chain[current_idx - 1]
+        except ValueError:
+            return t("gateway.tier_down.unknown_tier", model=current)
+
+        # Perform the switch
+        ctx = _ModelSwitchContext(
+            session_key=session_key, source=source, config_path=self.config_path,
+            persist_global=False, one_turn=False, reasoning_effort="")
+        ctx.read_config()
+
+        result, error = await self._perform_model_switch(ctx, prev_model, explicit_provider=None, source=source)
+        if error:
+            return error
+
+        switch_error = self._switch_cached_agent_model(result, ctx, picker=False)
+        if switch_error:
+            return switch_error
+
+        return t("gateway.tier_down.success", from_model=current, to_model=prev_model)

@@ -196,3 +196,26 @@ async def test_turn_error_preserves_diagnostic_bridge_and_failed_outcome(
     finally:
         logger.removeHandler(bridge)
         await adapter.cancel_background_tasks()
+
+
+@pytest.mark.asyncio
+async def test_runtime_draining_is_reported_as_restart_not_internal_error(profiles, caplog):
+    from hermes_state_runtime import RuntimeStoreError
+
+    adapter = RecordingAdapter()
+
+    async def handler(event):
+        raise RuntimeStoreError("runtime_draining")
+
+    adapter.set_message_handler(handler)
+    event = MessageEvent(text="work", source=adapter.build_source(chat_id="42", user_id="42"))
+    key = "agent:default:telegram:dm:42"
+    assert adapter._start_session_processing(event, key)
+    await adapter._session_tasks[key]
+
+    assert adapter.completed[-1] == ("work", ProcessingOutcome.CANCELLED)
+    assert len(adapter.wire) == 1
+    assert "restart" in adapter.wire[0][0].lower()
+    assert "RuntimeStoreError" not in adapter.wire[0][0]
+    assert "Error handling message: runtime_draining" not in caplog.text
+    assert not adapter._active_sessions

@@ -63,6 +63,8 @@ _TOPIC_TABLES = (
     ),
 )
 
+_TELEGRAM_STOP_TABLE = "telegram_chat_stop_control"
+
 # Shared SELECT for the unlinked-session listing; the profile/bindings clauses are
 # spliced in only when the bindings table exists.
 _UNLINKED_SELECT_HEAD = f"""
@@ -115,6 +117,45 @@ class SessionTelegramTopicsMixin:
 
     def _topic_read_all(self, sql: str, params):
         return self._topic_read(lambda: self._read_all(sql, params), [])
+
+    def set_telegram_chat_paused(
+        self, *, chat_id: str, user_id: str, profile_name: str = "default", paused: bool,
+    ) -> None:
+        """Persist the emergency stop state for one Telegram DM and profile."""
+        profile_name = _normalize_telegram_topic_profile_name(profile_name)
+        now = time.time()
+
+        def _do(conn):
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_TELEGRAM_STOP_TABLE} (
+                    profile_name TEXT NOT NULL DEFAULT 'default',
+                    chat_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    paused INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (profile_name, chat_id)
+                )
+            """)
+            conn.execute(f"""
+                INSERT INTO {_TELEGRAM_STOP_TABLE}
+                    (profile_name, chat_id, user_id, paused, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(profile_name, chat_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    paused = excluded.paused,
+                    updated_at = excluded.updated_at
+            """, (profile_name, str(chat_id), str(user_id), int(paused), now))
+
+        self._execute_write(_do)
+
+    def is_telegram_chat_paused(self, *, chat_id: str, profile_name: str = "default") -> bool:
+        """Return the persisted Telegram DM stop state; absent table/row means active."""
+        profile_name = _normalize_telegram_topic_profile_name(profile_name)
+        row = self._topic_read_one(
+            f"SELECT paused FROM {_TELEGRAM_STOP_TABLE} WHERE profile_name = ? AND chat_id = ?",
+            (profile_name, str(chat_id)),
+        )
+        return bool(row[0]) if row is not None else False
 
     def apply_telegram_topic_migration(self) -> None:
         """Create Telegram DM topic-mode tables on explicit /topic opt-in. Deliberately NOT

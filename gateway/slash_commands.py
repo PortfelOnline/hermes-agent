@@ -490,6 +490,54 @@ class GatewaySlashCommandsMixin(
             logger.debug("Failed to clear typing on /stop with no active agent", exc_info=True)
         return t("gateway.stop.no_active")
 
+    def _telegram_stop_db(self):
+        session_db = getattr(self, "_session_db", None)
+        return getattr(session_db, "_db", session_db)
+
+    def _telegram_stop_profile(self, source) -> str:
+        return str(getattr(source, "profile", None) or self._active_profile_name() or "default")
+
+    async def _handle_stopall_command(self, event: MessageEvent) -> str:
+        """Pause new turns in this Telegram DM and interrupt every running topic in it."""
+        source = event.source
+        if source.platform != Platform.TELEGRAM or source.chat_type != "dm":
+            return "This command is available only in Telegram private chats."
+        if not self._is_user_authorized_for_source(source):
+            return t("gateway.unauthorized.admin_only", command="stopall", suffix="")
+        db = self._telegram_stop_db()
+        if db is None:
+            return "Telegram chat control is unavailable."
+        profile = self._telegram_stop_profile(source)
+        db.set_telegram_chat_paused(
+            chat_id=source.chat_id, user_id=source.user_id or source.chat_id,
+            profile_name=profile, paused=True,
+        )
+        session_entry = await self.async_session_store.get_or_create_session(source)
+        own_key = session_entry.session_key
+        keys = {own_key}
+        keys.update(key for key, _chat_type, _tail in self._same_chat_runs(source, own_key))
+        for key in sorted(keys):
+            await self._interrupt_and_clear_session(
+                key, source, interrupt_reason="stopall_command", invalidation_reason="stopall_command",
+            )
+        return "all Telegram topics in this chat are stopped. Use /resumeall to resume."
+
+    async def _handle_resumeall_command(self, event: MessageEvent) -> str:
+        """Resume new turns in this Telegram DM without touching existing session history."""
+        source = event.source
+        if source.platform != Platform.TELEGRAM or source.chat_type != "dm":
+            return "This command is available only in Telegram private chats."
+        if not self._is_user_authorized_for_source(source):
+            return t("gateway.unauthorized.admin_only", command="resumeall", suffix="")
+        db = self._telegram_stop_db()
+        if db is None:
+            return "Telegram chat control is unavailable."
+        db.set_telegram_chat_paused(
+            chat_id=source.chat_id, user_id=source.user_id or source.chat_id,
+            profile_name=self._telegram_stop_profile(source), paused=False,
+        )
+        return "Telegram topics resumed."
+
     async def _handle_platform_command(self, event: MessageEvent) -> str:
         """Handle ``/platform list|pause|resume [name]`` — inspect and manually control failed/paused
         adapters (pause stops the reconnect watcher; resume re-queues for retry)."""

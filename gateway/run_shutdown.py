@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, Optional
 from agent.i18n import t
 from gateway.config import Platform
 from gateway.restart import (
-    DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, GATEWAY_SERVICE_RESTART_EXIT_CODE,
+    active_async_delegation_count, DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, GATEWAY_SERVICE_RESTART_EXIT_CODE,
     effective_stop_drain_timeout, effective_stop_watchdog_delay, resolve_cron_drain_budget
 )
 from gateway.run_common import _UNSET
@@ -197,7 +197,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             + managed_turn_count(self)
             + self._active_cron_job_count()
             + self._active_api_run_count()
-            + self._active_deferred_agent_worker_count()
+            + self._active_deferred_agent_worker_count() + active_async_delegation_count()
         )
 
     @staticmethod
@@ -1561,7 +1561,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             self._running_agent_count()
             + managed_turn_count(self)
             + self._active_api_run_count()
-            + self._active_deferred_agent_worker_count()
+            + self._active_deferred_agent_worker_count() + active_async_delegation_count()
         )
         return (
             max(0, non_cron - self._wedged_chat_agent_count())
@@ -1604,7 +1604,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                               "wedged": job["job_id"] in wedged,
                               "restart_safe": bool(job.get("restart_safe"))})
         for kind, count in (("managed", managed_turn_count(self)), ("api", self._active_api_run_count()),
-                            ("deferred", self._active_deferred_agent_worker_count())):
+                            ("deferred", self._active_deferred_agent_worker_count()), ("delegate", active_async_delegation_count())):
             units.extend({"kind": kind, "pid": os.getpid()} for _ in range(count))
         return units
 

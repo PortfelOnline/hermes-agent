@@ -347,7 +347,7 @@ _ACCENT = _SkinAwareAnsi("response_border", "#FFD700", bold=True)
 
 
 # dim+italic attributes (not a hex) so dim text inherits the terminal foreground in both modes.
-_DIM = "\x1b[2;3m"
+_DIM = "\x1b[3m"
 
 
 def _tty_wrap(s: str, sgr: str) -> str:
@@ -361,7 +361,7 @@ def _tty_wrap(s: str, sgr: str) -> str:
 _b = functools.partial(_tty_wrap, sgr="\x1b[1m")  # bold when stdout is a real TTY
 
 
-_d = functools.partial(_tty_wrap, sgr="\x1b[2;3m")  # dim-italic when stdout is a real TTY
+_d = functools.partial(_tty_wrap, sgr="\x1b[3m")  # dim-italic when stdout is a real TTY
 
 
 def _accent_hex() -> str:

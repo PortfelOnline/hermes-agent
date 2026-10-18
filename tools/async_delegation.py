@@ -297,7 +297,11 @@ def recover_abandoned_delegations() -> int:
             if alive(pid, started):
                 continue
             task = json.loads(task_json or "{}")
-            error = "Delegation owner exited before recording a terminal result; outcome unknown."
+            error = (
+                "Delegation owner exited before recording a terminal result; the outcome is unknown. "
+                "This task is retryable: re-dispatch the original goal once, after checking the persisted "
+                "transcript evidence below. Do not repeat non-idempotent side effects without verification."
+            )
             recovered_results = _recovered_results(task, result_json, error)
             if recovered_results:
                 done = sum(1 for r in recovered_results if r.get("status") != "unknown")
@@ -317,11 +321,15 @@ def recover_abandoned_delegations() -> int:
                 "parent_session_id": parent_id, "goal": task.get("goal", ""), "goals": task.get("goals"),
                 "context": task.get("context"), "toolsets": task.get("toolsets"), "role": task.get("role"),
                 "model": task.get("model"), "is_batch": bool(task.get("is_batch")),
-                "status": "unknown", "summary": None, "error": error, **diagnostics,
+                "status": "unknown", "summary": None, "error": error,
+                "recovery_required": True, "recovery_action": "redispatch_once",
+                "recovery_attempt": 0, "recovery_max_attempts": 1, **diagnostics,
                 **({"results": recovered_results} if recovered_results else {}),
                 "dispatched_at": dispatched_at, "completed_at": now,
                 **{k: task[k] for k in _ROUTING_KEYS if task.get(k)}}
-            result = {"status": "unknown", "summary": None, "error": event["error"], **diagnostics,
+            result = {"status": "unknown", "summary": None, "error": event["error"],
+                      "recovery_required": True, "recovery_action": "redispatch_once",
+                      "recovery_attempt": 0, "recovery_max_attempts": 1, **diagnostics,
                       **({"results": recovered_results} if recovered_results else {})}
             event, result = redact_completion_event(event), redact_child_result(result)
             conn.execute("""UPDATE async_delegations SET state='unknown', completed_at=?,
