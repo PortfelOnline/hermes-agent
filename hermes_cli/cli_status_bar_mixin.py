@@ -8,6 +8,7 @@ inside each method (``from cli import ...``) — never at module load time (impo
 from __future__ import annotations
 
 import errno
+import re
 import shutil
 import threading
 import time
@@ -197,6 +198,11 @@ class CLIStatusBarMixin:
         # Friendly display: reverse-alias from config ``model_aliases:`` first (turns long
         # Palantir RIDs into the user's short name), else slash/length truncation.
         model_short = _reverse_alias_for_display(model_name)
+        if model_short.startswith("route-"):
+            concrete = model_name.rsplit("/", 1)[-1]
+            match = re.fullmatch(r"gpt-(\d+(?:\.\d+)?)-(sol|luna|terra)(?:-.*)?", concrete, re.IGNORECASE)
+            concrete = f"{match[2].title()} {match[1]}" if match else concrete
+            model_short = f"{model_short} · {concrete}"
         if model_short == model_name:
             model_short = model_name.split("/")[-1] if "/" in model_name else model_name
             # Shared RID-prefix stripper so this and ModelSwitchResult can't drift.

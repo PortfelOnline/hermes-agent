@@ -55,6 +55,22 @@ def _attach_agent(
 
 
 class TestCLIStatusBar:
+    def test_routing_alias_keeps_concrete_model_visible(self, monkeypatch):
+        monkeypatch.setattr(cli_mod, "_reverse_alias_for_display", lambda model: "route-advanced")
+        cli_obj = _make_cli("gpt-6.1-sol")
+        snapshot = cli_obj._get_status_bar_snapshot()
+        assert snapshot["model_name"] == "gpt-6.1-sol"
+        assert snapshot["model_short"] == "route-advanced · Sol 6.1"
+        assert "route-advanced · Sol 6.1" in cli_obj._build_status_bar_text(width=140)
+
+    def test_routing_label_uses_actual_fallback_model(self, monkeypatch):
+        monkeypatch.setattr(cli_mod, "_reverse_alias_for_display", lambda model: "route-standard")
+        cli_obj = _make_cli("gpt-6.1-sol")
+        cli_obj.agent = SimpleNamespace(model="gpt-5.6-terra-900k")
+        snapshot = cli_obj._get_status_bar_snapshot()
+        assert snapshot["model_name"] == "gpt-5.6-terra-900k"
+        assert snapshot["model_short"] == "route-standard · Terra 5.6"
+
     def test_session_title_is_right_aligned_after_it_is_queued(self):
         cli_obj = _make_cli()
         cli_obj._pending_title = "weekly-digest"
