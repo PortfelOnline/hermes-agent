@@ -109,6 +109,12 @@ def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, task_i
         assert (_tool_guidance_block(agent) == KANBAN_GUIDANCE) is expected
 
 
+def test_default_prompt_requires_reasoning_summaries_to_match_user_language(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    prompt = build_system_prompt(_make_agent(skip_context_files=True))
+    assert "Any user-visible reasoning summary must use the same language as the user's message" in prompt
+
+
 @pytest.mark.parametrize("stores", [(True, True), (False, True), (True, False), (False, False)])
 @pytest.mark.parametrize("names", [
     set(), {"memory"}, {"memory", "skill_view", "skills_list"},
