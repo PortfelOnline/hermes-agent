@@ -150,26 +150,39 @@ class GatewayTurnPersistenceMixin:
         "blockquote": ("gateway.reasoning.quote_label_md", "> ", ">"),
     }
 
-    def _hmwa_prepend_reasoning(self, agent_result, response, source, _intentional_silence):
-        """Prepend the last reasoning block when show_reasoning is on for this platform. Mattermost
-        requires an explicit per-platform opt-in (scratch text, not final-answer content)."""
+    def _hmwa_reasoning_projected(self, source):
+        """Whether the reply text of this platform carries the reasoning block. Mattermost requires an
+        explicit per-platform opt-in (scratch text, not final-answer content)."""
         if source.platform == Platform.LOCAL and not _acp_launch(self, source):
             # Local viewers receive reasoning.delta through their event stream; projecting it into
             # the final response duplicates it and leaks messaging-platform formatting into Desktop.
-            return response
+            return False
         from gateway.run import _load_gateway_config, _platform_config_key, _resolve_gateway_display_bool
         try:
-            _show_reasoning_effective = _resolve_gateway_display_bool(
+            return _resolve_gateway_display_bool(
                 _load_gateway_config(), _platform_config_key(source.platform), "show_reasoning",
                 default=bool(getattr(self, "_show_reasoning", False)), platform=source.platform,
                 require_platform_override_for={Platform.MATTERMOST},
             )
         except Exception:
-            _show_reasoning_effective = (
-                False if source.platform == Platform.MATTERMOST else getattr(self, "_show_reasoning", False)
-            )
+            return False if source.platform == Platform.MATTERMOST else getattr(self, "_show_reasoning", False)
+
+    async def _hmwa_localize_reasoning(self, agent_result, source):
+        """Store a display-language copy of the reasoning next to the untouched ``last_reasoning``."""
         last_reasoning = agent_result.get("last_reasoning")
-        if not (_show_reasoning_effective and response and not _intentional_silence and last_reasoning):
+        if not (last_reasoning and self._hmwa_reasoning_projected(source)):
+            return
+        from gateway.reasoning_translation import translate_reasoning
+        loop = asyncio.get_running_loop()
+        agent_result["last_reasoning_display"] = await loop.run_in_executor(
+            None, copy_context().run, translate_reasoning, last_reasoning)
+
+    def _hmwa_prepend_reasoning(self, agent_result, response, source, _intentional_silence):
+        """Prepend the last reasoning block when show_reasoning is on for this platform."""
+        if not self._hmwa_reasoning_projected(source):
+            return response
+        last_reasoning = agent_result.get("last_reasoning_display") or agent_result.get("last_reasoning")
+        if not (response and not _intentional_silence and last_reasoning):
             return response
         from gateway.stream_consumer_fences import escape_code_fences_for_display
         # Collapse long reasoning to keep messages readable
