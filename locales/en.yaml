@@ -713,6 +713,7 @@ gateway:
     action_restarting: "restarting"
     action_shutting_down: "shutting down"
     reject_model: "Agent is running — wait or /stop first, then switch models."
+    model_deferred: "⏳ Switch to {target} queued — it applies when this reply finishes. No /stop needed."
     reject_codex_runtime: "Agent is running — wait or /stop first, then change runtime."
     reject_moa: "Agent is running — wait or /stop first, then run /moa."
     drain_queued: "⏳ Gateway {action} — queued for the next turn after it comes back."

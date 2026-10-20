@@ -90,6 +90,11 @@ print(json.dumps([{"event": event, "message": format_process_notification(event)
         event = item['event']
         assert event["status"] == "unknown"
         assert event["last_known_status"] == "running"
+        assert event["recovery_required"] is True
+        assert event["recovery_action"] == "redispatch_once"
+        assert event["recovery_attempt"] == 0
+        assert event["recovery_max_attempts"] == 1
+        assert "re-dispatch" in event["error"]
         assert "running" in item["message"]
         assert not event.get("summary")
         paths = event['task_transcripts']

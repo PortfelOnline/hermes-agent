@@ -321,6 +321,13 @@ def parse_signal_interrupt_grace_timeout(raw: object) -> float:
     return _parse_timeout_keeping_zero(raw, DEFAULT_GATEWAY_SIGNAL_INTERRUPT_GRACE_TIMEOUT, finite=True)
 
 
+def active_async_delegation_count() -> int:
+    """Count delegate_task units that a gateway restart must allow to finish."""
+    from tools.async_delegation import active_count
+
+    return max(0, int(active_count()))
+
+
 def resolve_cron_drain_budget(
     drain_timeout: float, cron_drain_timeout: float, *, watchdog_delay: float, elapsed: float = 0.0,
     cleanup_reserve_s: float = CRON_DRAIN_CLEANUP_RESERVE_S,

@@ -1367,6 +1367,9 @@ class GatewayInboundMixin(
             # Turn lease is keyed by (routing key, run generation) so this unwind can only free
             # the lease its own turn acquired, never a newer turn's.
             self._release_turn_lease(_quick_key, _run_generation)
+            # A /model sent mid-run lands here, once this turn has released its slot.
+            if not self._is_session_running(_quick_key):
+                await self._apply_deferred_busy_model_switch(_quick_key)
 
     def _restore_pending_one_turn_model_override(self, session_key: str, run_generation: int | None = None) -> None:
         """Restore the per-session model override captured by ``/model --once`` or ``/moa``.

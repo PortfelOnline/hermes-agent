@@ -270,7 +270,7 @@ def run_oneshot(
     if toolsets_error:
         sys.stderr.write(toolsets_error)
         return 2
-    use_config_toolsets = _normalize_toolsets(toolsets) is None
+    use_config_toolsets = toolsets is None
 
     # Non-interactive by definition — an approval prompt would hang forever.
     os.environ["HERMES_YOLO_MODE"] = "1"

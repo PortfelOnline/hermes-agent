@@ -140,6 +140,32 @@ def test_unroutable_async_event_remains_retryable(
     assert not isolated.empty()
 
 
+@pytest.mark.asyncio
+async def test_failed_watch_injection_is_consumed_not_requeued(monkeypatch):
+    isolated = queue.Queue()
+    isolated.put({
+        "type": "watch_match",
+        "event_id": "watch-1",
+        "session_id": "proc-stale",
+        "session_key": "agent:main:telegram:dm:123:477411",
+        "platform": "telegram",
+        "chat_type": "dm",
+        "chat_id": "123",
+        "thread_id": "477411",
+        "pattern": "READY",
+        "output": "READY",
+    })
+    runner = _runner(SimpleNamespace())
+    monkeypatch.setattr(runner, "_completion_event_scope", lambda _evt: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(runner, "_load_background_notifications_mode", lambda: "on")
+    monkeypatch.setattr(runner, "_inject_watch_notification", AsyncMock(return_value=None))
+
+    await runner._drain_watch_notifications(isolated)
+
+    assert isolated.empty()
+    runner._inject_watch_notification.assert_awaited_once()
+
+
 def test_concurrent_claims_share_the_same_narrow_delivery_seam():
     """Concurrent consumers in one runner cannot both enter the adapter."""
     entered = asyncio.Event()

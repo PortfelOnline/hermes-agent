@@ -44,6 +44,37 @@ def test_cli_restart_wait_covers_configured_cron_drain(tmp_path, monkeypatch):
     assert with_cron > gateway_cli._get_restart_exit_wait_budget()
 
 
+def test_restart_drain_includes_live_async_delegations(monkeypatch):
+    """A graceful gateway restart must wait for background delegate_task units."""
+    monkeypatch.setattr("tools.async_delegation.active_count", lambda: 2)
+    runner = object.__new__(GatewayRunner)
+    monkeypatch.setattr(runner, "_running_agent_count", lambda: 1)
+    monkeypatch.setattr(runner, "_active_cron_job_count", lambda: 3)
+    monkeypatch.setattr(runner, "_active_api_run_count", lambda: 4)
+    monkeypatch.setattr(runner, "_active_deferred_agent_worker_count", lambda: 5)
+    monkeypatch.setattr("gateway.run_shutdown.managed_turn_count", lambda _runner: 6)
+
+    from gateway.restart import active_async_delegation_count
+
+    assert active_async_delegation_count() == 2
+    assert runner._active_work_count() == 21
+
+
+def test_restart_description_names_live_async_delegations(monkeypatch):
+    """Restart diagnostics must expose delegate work instead of hiding it in the daemon pool."""
+    monkeypatch.setattr("tools.async_delegation.active_count", lambda: 2)
+    runner = object.__new__(GatewayRunner)
+    monkeypatch.setattr(runner, "_running_agent_count", lambda: 0)
+    monkeypatch.setattr(runner, "_active_api_run_count", lambda: 0)
+    monkeypatch.setattr(runner, "_active_deferred_agent_worker_count", lambda: 0)
+    monkeypatch.setattr("gateway.run_shutdown.managed_turn_count", lambda _runner: 0)
+    monkeypatch.setattr(runner, "_sessions_map", dict)
+    monkeypatch.setattr("cron.scheduler.get_running_job_details", list)
+    monkeypatch.setattr("cron.scheduler.get_wedged_job_ids", lambda: set())
+
+    units = runner._describe_active_work()
+    assert [u["kind"] for u in units] == ["delegate", "delegate"]
+
 def test_load_restart_after_turn_timeout_preserves_zero(tmp_path, monkeypatch):
     """Config/env ``0`` must disable after-turn wait, not fall back to default."""
     import gateway.run as gateway_run
