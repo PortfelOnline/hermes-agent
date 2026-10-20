@@ -4,6 +4,8 @@ from copy import deepcopy
 
 import pytest
 
+from gateway.run import GatewayRunner
+
 
 @pytest.mark.asyncio
 async def test_coalesced_siblings_survive_lost_ack_and_owner_restart(tmp_path, monkeypatch):

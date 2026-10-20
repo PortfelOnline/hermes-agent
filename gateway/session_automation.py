@@ -325,7 +325,8 @@ def admission_display(payload):
 
 
 def _route_identity(source):
-    return {key: value for key, value in source.to_dict().items() if key != 'message_id'}
+    # A topic title can change without changing the forum-thread route.
+    return {key: value for key, value in source.to_dict().items() if key not in {'message_id', 'chat_topic'}}
 
 
 def committed_route_envelope(authority, entry):

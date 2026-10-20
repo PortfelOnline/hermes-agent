@@ -124,3 +124,44 @@ async def test_unavailable_raw_route_is_quiet_without_hiding_invalid_routes(tmp_
         assert not api._background_tasks and not caplog.records
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_automation_completion_accepts_changed_chat_labels(monkeypatch):
+    from gateway.session_authority import SessionAuthority, initialize_session_authority
+    from gateway.session_automation import snapshot_automation
+    from gateway.session_ingress_context import native_callback
+    from hermes_constants import get_hermes_home
+
+    monkeypatch.setattr(SessionAuthority, "_schedule", lambda self, ref: None)
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "42")
+    runner = GatewayRunner(GatewayConfig())
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, typing_indicator=False))
+    runner.adapters = {Platform.DISCORD: adapter}
+    authority = await initialize_session_authority(runner, profile_id="default", instance_id="chat-labels")
+    runner._wire_adapter_handlers(adapter)
+    admitted_source = adapter.build_source(chat_id="42", chat_type="dm", user_id="42")
+    admitted_source.chat_topic = "Old topic label"
+    human = MessageEvent(text="human", source=admitted_source, message_id="human")
+    with native_callback(runner, human, get_hermes_home()):
+        await authority.admit_native(human)
+    session_key = build_session_key(admitted_source)
+    session_id = runner.session_store.peek_session_id(session_key)
+    restored_source = SessionSource(platform=Platform.DISCORD, chat_id="42", chat_type="dm", user_id="42")
+    completion = MessageEvent(
+        text="completed", source=restored_source, internal=True,
+        metadata={"gateway_session_key": session_key, "gateway_session_id": session_id},
+    )
+
+    payload, entry = snapshot_automation(authority, adapter, completion, "async:label-drift")
+
+    assert entry.session_key == session_key
+    assert payload["native_text_v1"]["route"] == session_key
+
+    from hermes_state_runtime import RuntimeStoreError
+    wrong_route = MessageEvent(
+        text="completed", source=SessionSource(platform=Platform.DISCORD, chat_id="43", chat_type="dm", user_id="42"),
+        internal=True, metadata={"gateway_session_key": session_key, "gateway_session_id": session_id},
+    )
+    with pytest.raises(RuntimeStoreError, match="admission_conflict"):
+        snapshot_automation(authority, adapter, wrong_route, "async:wrong-route")
