@@ -161,6 +161,37 @@ class SessionTelegramTopicsMixin:
             )
         self._execute_write(_do)
 
+    def set_telegram_chat_paused(self, *, chat_id: str, user_id: str, profile_name: str, paused: bool) -> None:
+        """Persist the emergency pause for one Telegram private chat and profile."""
+        profile_name = _normalize_telegram_topic_profile_name(profile_name)
+        def _do(conn):
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS telegram_chat_stop_control (
+                    profile_name TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    paused INTEGER NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (profile_name, chat_id)
+                )
+            """)
+            conn.execute("""
+                INSERT INTO telegram_chat_stop_control(profile_name, chat_id, user_id, paused, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(profile_name, chat_id) DO UPDATE SET
+                    user_id=excluded.user_id, paused=excluded.paused, updated_at=excluded.updated_at
+            """, (profile_name, str(chat_id), str(user_id), int(paused), time.time()))
+        self._execute_write(_do)
+
+    def is_telegram_chat_paused(self, *, chat_id: str, profile_name: str) -> bool:
+        """Return whether new turns are paused for one Telegram private chat/profile."""
+        profile_name = _normalize_telegram_topic_profile_name(profile_name)
+        row = self._topic_read_one(
+            "SELECT paused FROM telegram_chat_stop_control WHERE profile_name = ? AND chat_id = ?",
+            (profile_name, str(chat_id)),
+        )
+        return bool(row[0]) if row is not None else False
+
     def enable_telegram_topic_mode(
         self, *, chat_id: str, user_id: str, profile_name: str="default", has_topics_enabled: Optional[bool]=None,
         allows_users_to_create_topics: Optional[bool]=None,

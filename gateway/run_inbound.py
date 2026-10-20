@@ -27,6 +27,7 @@ from gateway.run_busy import approval_input_words
 from gateway.run_inbound_media import rehome_inbound_media
 from gateway.run_inbound_hooks import GatewayInboundHooksMixin
 from gateway.run_inbound_transcription import GatewayInboundTranscriptionMixin
+from gateway.run_inbound_telegram_stop import GatewayTelegramChatStopMixin
 from gateway.run_plugin_injection import GatewayPluginInjectionMixin
 from gateway.run_inbound_unauthorized import (
     UnauthorizedOwnerNotifier, pairing_code_reply, pairing_profile_arg, pairing_rate_limited_reply,
@@ -68,7 +69,10 @@ def strip_discord_triggering_note(event: Any, message_text: Any) -> Any:
     return message_text.removeprefix(prefix)
 
 
-class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionMixin, GatewayPluginInjectionMixin):
+class GatewayInboundMixin(
+    GatewayTelegramChatStopMixin, GatewayInboundHooksMixin, GatewayInboundTranscriptionMixin,
+    GatewayPluginInjectionMixin,
+):
     """Inbound message pipeline (_handle_message, text/media preparation, durable-turn markers, plugin injection) for GatewayRunner."""
 
     async def _hm_offer_pairing_code(self, source: SessionSource) -> None:
@@ -1260,6 +1264,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         _paused_notice = self._hm_estop_gate(event, source, is_internal)
         if _paused_notice is not None:
             return _paused_notice
+        _chat_stop_notice = self._hm_telegram_chat_stop_gate(event, source, is_internal)
+        if _chat_stop_notice is not None:
+            return _chat_stop_notice
 
         _quick_key = self._session_key_for_source(source)
         _reply = None if is_internal else await self._hm_pending_reply_intercepts(event, source, _quick_key)

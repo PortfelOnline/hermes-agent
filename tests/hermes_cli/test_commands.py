@@ -141,6 +141,12 @@ class TestGatewayHelpLines:
 
 class TestTelegramBotCommands:
 
+    def test_tier_and_chat_stop_commands_are_visible_and_resolvable(self):
+        names = {name for name, _ in telegram_bot_commands()}
+        assert {"stopall", "resumeall", "tier_up", "tier_down"} <= names
+        assert resolve_command("tier_up") is resolve_command("tier-up")
+        assert resolve_command("tier_down") is resolve_command("tier-down")
+
     def test_no_hyphens_in_command_names(self):
         """Telegram does not support hyphens in command names."""
         for name, _ in telegram_bot_commands():

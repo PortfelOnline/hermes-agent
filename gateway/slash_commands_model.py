@@ -42,6 +42,29 @@ def _fast_route_supports(model: str, runtime: dict, tier: Optional[str] = None) 
         model, provider=runtime.get("provider"), base_url=runtime.get("base_url"), tier=tier) is not None
 
 
+def _configured_tier_target(aliases: dict, current_model: str, direction: int) -> tuple[str | None, str | None]:
+    """Return the adjacent configured route alias; never invent a model ID."""
+    groups = (
+        ("route-low", "route-standard", "route-advanced", "route-expert-astra", "route-expert-opus", "route-super-expert"),
+        ("haiku", "sonnet", "opus"),
+        ("haiku", "sonnet", "route-expert-opus"),
+    )
+    def normalize(value: str) -> str:
+        return str(value or "").strip().lower().split("/", 1)[-1]
+
+    current = normalize(current_model)
+    at_boundary = False
+    for group in groups:
+        configured = [(name, aliases[name]) for name in group if isinstance(aliases.get(name), str) and aliases[name].strip()]
+        index = next((i for i, (_name, model) in enumerate(configured) if normalize(model) == current), None)
+        if index is not None:
+            target_index = index + direction
+            if 0 <= target_index < len(configured):
+                return configured[target_index][0], None
+            at_boundary = True
+    return None, "boundary" if at_boundary else "unknown"
+
+
 # /reasoning display-toggle arguments -> show_reasoning value.
 _REASONING_DISPLAY_TOGGLES = {"show": True, "on": True, "hide": False, "off": False}
 
@@ -909,3 +932,55 @@ class GatewayModelCommandsMixin:
         if picker_sent:
             return None  # Picker sent — adapter handles the response
         return t("gateway.fast.status", mode=status)
+
+    async def _handle_tier_switch_command(self, event: MessageEvent, direction: int) -> Optional[str]:
+        """Move one step on the profile's configured route ladder, scoped to this session."""
+        from gateway.run import _load_gateway_config
+
+        source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
+        session_key = self._session_key_for_source(source)
+        config = _load_gateway_config()
+        model_config = config.get("model", {}) if isinstance(config, dict) else {}
+        aliases = model_config.get("aliases", {}) if isinstance(model_config, dict) else {}
+        aliases = aliases if isinstance(aliases, dict) else {}
+        try:
+            current_model, _runtime = await asyncio.to_thread(
+                self._resolve_session_agent_runtime,
+                source=source, session_key=session_key, user_config=config,
+            )
+        except Exception as exc:
+            logger.warning("Could not resolve current model for tier command: %s", exc)
+            return "Could not resolve this session's current model."
+        target_alias, reason = _configured_tier_target(aliases, current_model, direction)
+        if target_alias is None:
+            if reason == "boundary":
+                return "This session is already at the highest configured tier." if direction > 0 else \
+                    "This session is already at the lowest configured tier."
+            return "No configured tier ladder contains this session's current model."
+
+        if self._is_session_running(session_key):
+            generation = self._interrupt_running_turn(
+                session_key, interrupt_reason="tier_switch_command",
+                invalidation_reason="tier_switch_command",
+            )
+            adapter = self._delivery_adapter_for(source)
+            if adapter and hasattr(adapter, "interrupt_session_activity"):
+                await adapter.interrupt_session_activity(
+                    session_key, source.chat_id, metadata=self._thread_metadata_for_source(source),
+                )
+            self._drop_turn_slot(session_key, run_generation=generation)
+
+        model_event = dataclasses.replace(event, source=source, text=f"/model {target_alias} --session")
+        reply = await self._handle_model_command(model_event)
+        override = (getattr(self, "_session_model_overrides", {}) or {}).get(session_key) or {}
+        expected_model = str(aliases[target_alias]).strip().lower().split("/", 1)[-1]
+        actual_model = str(override.get("model") or "").strip().lower().split("/", 1)[-1]
+        if actual_model != expected_model:
+            return reply or "Model switch was not committed; the session route is unchanged."
+        return reply or f"Session model changed to {target_alias}."
+
+    async def _handle_tier_up_command(self, event: MessageEvent) -> Optional[str]:
+        return await self._handle_tier_switch_command(event, 1)
+
+    async def _handle_tier_down_command(self, event: MessageEvent) -> Optional[str]:
+        return await self._handle_tier_switch_command(event, -1)
